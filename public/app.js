@@ -140,7 +140,16 @@ async function action(name,payload){ const data=await api('/api/state',{method:'
 function toast(msg,type=''){ clearTimeout(toastTimer); document.querySelector('.toast')?.remove(); const el=document.createElement('div'); el.className=`toast ${type}`; el.textContent=msg; document.body.append(el); toastTimer=setTimeout(()=>el.remove(),3200); }
 
 async function load(){
-  try{ const data=await api(); state=data.state; render(); if(!currentUserId || !member(currentUserId)) showOnboarding(); }
+  try{
+    const data=await api();
+    state=data.state;
+    if(!currentUserId || !member(currentUserId)){
+      root.innerHTML=`<div class="screen-message"><div class="card"><div class="page-kicker">🏆 DuoLiga</div><h2 class="page-title">Bem-vindo ao desafio</h2><p class="page-desc">Crie ou escolha seu perfil para entrar.</p></div></div>`;
+      showOnboarding();
+      return;
+    }
+    render();
+  }
   catch(e){ if(e.status===401) showAccessModal(); else { root.innerHTML=`<div class="screen-message"><div class="card"><h2>Não consegui conectar ao DuoLiga.</h2><p>${esc(e.message)}</p><button class="primary-btn" id="retry">Tentar novamente</button></div></div>`; document.querySelector('#retry')?.addEventListener('click',load); } }
 }
 
@@ -369,12 +378,16 @@ function showAccessModal(){
 }
 function showOnboarding(){
   const old=document.querySelector('.modal-backdrop'); if(old) old.remove();
+  const isFirstMember = state.members.length===0;
   const fixedLanguage = state.season.language || 'Inglês';
+  const languageField = isFirstMember
+    ? `<select class="select" id="signup-language">${LANGUAGE_OPTIONS.map(l=>`<option ${fixedLanguage===l?'selected':''}>${l}</option>`).join('')}</select><small class="tiny muted">O primeiro participante define o idioma da temporada. Depois ele fica igual para todos.</small>`
+    : `<div class="fake-input">${flagForLanguage(fixedLanguage)} ${esc(fixedLanguage)}</div><input type="hidden" id="signup-language" value="${esc(fixedLanguage)}"><small class="tiny muted">Idioma já definido para esta temporada.</small>`;
   const wrap=document.createElement('div'); wrap.className='modal-backdrop';
-  wrap.innerHTML=`<div class="modal"><div class="eyebrow">Bem-vindo ao DuoLiga</div><h2>Cadastre-se para entrar no desafio</h2><p>Ao abrir o app, cada participante cria seu perfil e confirma o idioma da temporada.</p>
+  wrap.innerHTML=`<div class="modal"><div class="eyebrow">Bem-vindo ao DuoLiga</div><h2>Cadastre-se para entrar no desafio</h2><p>${isFirstMember?'Você será o primeiro participante e poderá definir o idioma da temporada.':'Crie seu perfil para participar do mesmo idioma escolhido pelo grupo.'}</p>
     <form id="signup-form" class="form-grid" style="margin-top:14px">
-      <div class="field full"><label>Seu nome</label><input class="input" id="signup-name" placeholder="Ex.: MJ" required></div>
-      <div class="field full"><label>Idioma da temporada</label><select class="select" id="signup-language">${LANGUAGE_OPTIONS.map(l=>`<option ${fixedLanguage===l?'selected':''}>${l}</option>`).join('')}</select><small class="tiny muted">Todos devem usar o mesmo idioma da temporada.</small></div>
+      <div class="field full"><label>Seu nome</label><input class="input" id="signup-name" placeholder="Ex.: MJ" required maxlength="30"></div>
+      <div class="field full"><label>Idioma da temporada</label>${languageField}</div>
       <div class="field full"><button class="primary-btn">Criar meu perfil</button></div>
     </form>
     ${state.members.length?`<div class="sep"></div><div class="section-head"><h3>Ou entrar com um perfil já existente</h3></div><div class="picker">${state.members.map(m=>`<button type="button" data-member="${m.id}">${avatar(m)}<strong>${esc(m.name)}</strong></button>`).join('')}</div>`:''}
@@ -385,17 +398,24 @@ function showOnboarding(){
     e.preventDefault();
     const name=wrap.querySelector('#signup-name').value.trim();
     const language=wrap.querySelector('#signup-language').value;
+    const submit=e.submitter;
     if(!name) return;
+    submit.disabled=true; submit.textContent='Criando perfil…';
     try{
-      const beforeCount = state.members.length;
-      await action('addMember',{name});
-      const newest = state.members[state.members.length-1];
-      if(state.members.length === beforeCount + 1 && newest){ currentUserId = newest.id; localStorage.setItem('duoliga-member', currentUserId); }
-      if(language && state.season.language !== language){ await action('updateSeason',{ language }); }
+      let response = await api('/api/state',{method:'POST',body:JSON.stringify({action:'addMember',payload:{name}})});
+      state=response.state;
+      const newest=state.members[state.members.length-1];
+      if(!newest) throw new Error('Não foi possível criar o perfil.');
+      currentUserId=newest.id;
+      localStorage.setItem('duoliga-member',currentUserId);
+      if(isFirstMember && language && state.season.language!==language){
+        response = await api('/api/state',{method:'POST',body:JSON.stringify({action:'updateSeason',payload:{language}})});
+        state=response.state;
+      }
       wrap.remove();
       render();
       toast(`Bem-vindo, ${name}!`,'success');
-    }catch(err){ toast(err.message,'error'); }
+    }catch(err){ submit.disabled=false; submit.textContent='Criar meu perfil'; toast(err.message,'error'); }
   });
 }
 function flagForLanguage(language){ return ({'Inglês':'🇺🇸','Espanhol':'🇪🇸','Francês':'🇫🇷','Alemão':'🇩🇪','Italiano':'🇮🇹'}[language] || '🌎'); }
