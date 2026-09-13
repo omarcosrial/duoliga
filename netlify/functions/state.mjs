@@ -13,7 +13,7 @@ function mondayISO(date = new Date()) {
 
 function defaultState() {
   return {
-    version: 1,
+    version: 2,
     season: {
       name: "Temporada 1",
       language: "Inglês",
@@ -60,8 +60,27 @@ function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 }
 
+function validPin(value) {
+  return /^\d{4}$/.test(String(value || ""));
+}
+
 function id(prefix = "id") {
   return `${prefix}_${crypto.randomUUID()}`;
+}
+
+async function hashPin(pin, salt) {
+  const input = new TextEncoder().encode(`${salt}:${pin}`);
+  const digest = await crypto.subtle.digest("SHA-256", input);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function publicState(state) {
+  const copy = structuredClone(state);
+  copy.members = copy.members.map(member => {
+    const { pinHash, pinSalt, ...safe } = member;
+    return { ...safe, pinSet: Boolean(pinHash && pinSalt) };
+  });
+  return copy;
 }
 
 async function snapshot(store) {
@@ -74,7 +93,7 @@ async function mutate(store, mutator) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const current = await snapshot(store);
     const next = structuredClone(current.data);
-    const result = mutator(next);
+    const result = await mutator(next);
     if (result?.error) return { error: result.error, status: result.status || 400 };
     next.updatedAt = new Date().toISOString();
     const write = current.exists
@@ -89,7 +108,7 @@ function findMember(state, memberId) {
   return state.members.find(m => m.id === memberId);
 }
 
-function applyAction(state, action, payload = {}) {
+async function applyAction(state, action, payload = {}) {
   if (action === "checkin") {
     const member = findMember(state, payload.memberId);
     if (!member) return { error: "Participante inválido." };
@@ -161,6 +180,18 @@ function applyAction(state, action, payload = {}) {
     return {};
   }
 
+  if (action === "setPin") {
+    const member = findMember(state, payload.memberId);
+    if (!member) return { error: "Participante inválido." };
+    if (member.pinHash && member.pinSalt) return { error: "Este perfil já possui uma senha cadastrada.", status: 409 };
+    const pin = String(payload.pin || "");
+    if (!validPin(pin)) return { error: "A senha deve ter exatamente 4 números." };
+    member.pinSalt = crypto.randomUUID();
+    member.pinHash = await hashPin(pin, member.pinSalt);
+    member.pinSetAt = new Date().toISOString();
+    return {};
+  }
+
   if (action === "deleteMember") {
     const member = findMember(state, payload.memberId);
     if (!member) return { error: "Participante inválido." };
@@ -170,26 +201,21 @@ function applyAction(state, action, payload = {}) {
     state.missionCompletions = state.missionCompletions.filter(m => m.memberId !== member.id);
     state.pokes = state.pokes.filter(p => p.fromId !== member.id && p.toId !== member.id);
     state.paidDebtIds = state.paidDebtIds.filter(debtId => !String(debtId).endsWith(`_${member.id}`));
-
     state.conversations = state.conversations
-      .map(c => {
-        const participants = c.participants.filter(id => id !== member.id);
-        return {
-          ...c,
-          participants,
-          winnerId: c.winnerId === member.id ? "" : c.winnerId
-        };
-      })
+      .map(c => ({ ...c, participants: c.participants.filter(pid => pid !== member.id), winnerId: c.winnerId === member.id ? "" : c.winnerId }))
       .filter(c => c.participants.length >= 2);
-
     return {};
   }
 
   if (action === "addMember") {
     const name = cleanText(payload.name, 30);
+    const pin = String(payload.pin || "");
     if (!name) return { error: "Informe o nome do participante." };
+    if (!validPin(pin)) return { error: "Crie uma senha de exatamente 4 números." };
     if (state.members.length >= 10) return { error: "Limite de 10 participantes." };
-    state.members.push({ id: id("member"), name, photoUrl: "", createdAt: new Date().toISOString() });
+    const pinSalt = crypto.randomUUID();
+    const pinHash = await hashPin(pin, pinSalt);
+    state.members.push({ id: id("member"), name, photoUrl: "", pinSalt, pinHash, pinSetAt: new Date().toISOString(), createdAt: new Date().toISOString() });
     return {};
   }
 
@@ -215,18 +241,29 @@ export default async (req) => {
 
   if (req.method === "GET") {
     const current = await snapshot(store);
-    if (!current.exists) {
-      await store.setJSON(STATE_KEY, current.data, { onlyIfNew: true });
-    }
-    return json({ state: current.data, secured: Boolean(process.env.APP_ACCESS_CODE) });
+    if (!current.exists) await store.setJSON(STATE_KEY, current.data, { onlyIfNew: true });
+    return json({ state: publicState(current.data), secured: Boolean(process.env.APP_ACCESS_CODE) });
   }
 
   if (req.method === "POST") {
     let body;
     try { body = await req.json(); } catch { return json({ error: "JSON inválido." }, 400); }
+
+    if (body.action === "verifyPin") {
+      const current = await snapshot(store);
+      const member = findMember(current.data, body.payload?.memberId);
+      if (!member) return json({ error: "Participante inválido." }, 404);
+      if (!member.pinHash || !member.pinSalt) return json({ error: "Este perfil ainda precisa criar uma senha de 4 dígitos.", code: "PIN_NOT_SET" }, 409);
+      const pin = String(body.payload?.pin || "");
+      if (!validPin(pin)) return json({ error: "Digite os 4 números da senha." }, 400);
+      const candidate = await hashPin(pin, member.pinSalt);
+      if (candidate !== member.pinHash) return json({ error: "Senha incorreta." }, 401);
+      return json({ state: publicState(current.data), verified: true, memberId: member.id });
+    }
+
     const result = await mutate(store, state => applyAction(state, body.action, body.payload));
     if (result.error) return json({ error: result.error }, result.status || 400);
-    return json({ state: result.data });
+    return json({ state: publicState(result.data) });
   }
 
   return json({ error: "Método não permitido." }, 405);
