@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'duoliga-cache-reset-v22';
+const CACHE_VERSION = 'duoliga-cache-reset-v25';
 self.addEventListener('install', event => {
   self.skipWaiting();
 });
