@@ -1,6 +1,6 @@
 import { getStore } from "@netlify/blobs";
 
-const STATE_KEY = "state-v1";
+const STATE_KEY = "state-v2";
 const STORE_NAME = "duoliga-data";
 
 function mondayISO(date = new Date()) {
@@ -23,11 +23,7 @@ function defaultState() {
       penaltyAmount: 10,
       conversationSeconds: 300
     },
-    members: [
-      { id: "mj", name: "MJ", photoUrl: "", createdAt: new Date().toISOString() },
-      { id: "matheus", name: "Matheus", photoUrl: "", createdAt: new Date().toISOString() },
-      { id: "carol", name: "Carol", photoUrl: "", createdAt: new Date().toISOString() }
-    ],
+    members: [],
     checkins: [],
     missionCompletions: [],
     conversations: [],
