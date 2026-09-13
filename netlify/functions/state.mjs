@@ -161,6 +161,30 @@ function applyAction(state, action, payload = {}) {
     return {};
   }
 
+  if (action === "deleteMember") {
+    const member = findMember(state, payload.memberId);
+    if (!member) return { error: "Participante inválido." };
+
+    state.members = state.members.filter(m => m.id !== member.id);
+    state.checkins = state.checkins.filter(c => c.memberId !== member.id);
+    state.missionCompletions = state.missionCompletions.filter(m => m.memberId !== member.id);
+    state.pokes = state.pokes.filter(p => p.fromId !== member.id && p.toId !== member.id);
+    state.paidDebtIds = state.paidDebtIds.filter(debtId => !String(debtId).endsWith(`_${member.id}`));
+
+    state.conversations = state.conversations
+      .map(c => {
+        const participants = c.participants.filter(id => id !== member.id);
+        return {
+          ...c,
+          participants,
+          winnerId: c.winnerId === member.id ? "" : c.winnerId
+        };
+      })
+      .filter(c => c.participants.length >= 2);
+
+    return {};
+  }
+
   if (action === "addMember") {
     const name = cleanText(payload.name, 30);
     if (!name) return { error: "Informe o nome do participante." };
